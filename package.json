@@ -1,0 +1,55 @@
+{
+  "name": "dsh-whale-greeting",
+  "version": "0.5.0",
+  "description": "DSH 对话区问候插件：大幅问候卡、24 张表情包头像每次随机、8 时段 × 6 说法 + 120 句轮换不重复；一轮任务跑完交付完成报告（含用时、第几件，出错换警告形态）；长跑时每 4~8 分钟随机说一句陪伴；需要授权时由小鲸接管输入框向主人请示（允许一次 / 拒绝，保留工具详情）。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "assets",
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "greeting",
+    "whale",
+    "maid",
+    "companion"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mr-Luo0036/dsh-whale-greeting.git"
+  },
+  "homepage": "https://github.com/Mr-Luo0036/dsh-whale-greeting#readme",
+  "author": "Mr-Luo0036",
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  }
+}

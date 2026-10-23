@@ -1,0 +1,7 @@
+# 统一 LF：这个仓库在 Windows 上开发，但包要在所有平台上跑
+* text=auto eol=lf
+
+# 图片按二进制处理，别做换行转换
+*.png binary
+*.jpg binary
+*.ico binary

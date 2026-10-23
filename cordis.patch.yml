@@ -1,0 +1,6 @@
+# dsh-whale-greeting bundle 层：装到哪个 profile，就把这一行插进那棵配置树。
+# 纯浏览器半的插件：host 侧只有三条只读路由（status / diag / avatar），不注册任何服务。
+
+- insert:
+    - id: whale-greeting
+      name: dsh-whale-greeting

@@ -20,15 +20,31 @@ const avatars = existsSync(avatarsDir)
   ? readdirSync(avatarsDir).filter((name) => name.endsWith('.png')).sort()
   : []
 
+// 语音包清单：assets/voice/manifest.json 由克隆脚本产出，形状
+//   { voice, notes, clips: { 'hi-0': { f: 'hi-0.mp3', t: '夜深了呢，主人！' }, ... } }
+// 没有语音包就把空对象注进去 —— 浏览器半看到空包会自动藏掉喇叭开关。
+const voiceManifestPath = join(root, 'assets', 'voice', 'manifest.json')
+let voiceClips = {}
+if (existsSync(voiceManifestPath)) {
+  const manifest = JSON.parse(readFileSync(voiceManifestPath, 'utf8'))
+  const raw = manifest && typeof manifest.clips === 'object' && manifest.clips !== null ? manifest.clips : {}
+  // 只把浏览器真正要用的两项带进去：文件名和原文。清单里给人和脚本看的字段（发音文本、
+  // 生成时间之类）不进 bundle。
+  for (const [key, value] of Object.entries(raw)) {
+    if (value && typeof value.f === 'string') voiceClips[key] = { f: value.f, t: String(value.t ?? '') }
+  }
+}
+
 if (source.includes('return module.exports; } });')) {
   throw new Error('build: src/client.js already carries the loader tail; it is source, not a bundle')
 }
-if (!source.includes('__CSS_JSON__') || !source.includes('__AVATAR__') || !source.includes('__AVATARS_JSON__')) {
+if (!source.includes('__CSS_JSON__') || !source.includes('__AVATAR__') || !source.includes('__AVATARS_JSON__') || !source.includes('__VOICE_JSON__')) {
   throw new Error('build: placeholders missing from src/client.js')
 }
 
 const body = source
   .replace('__AVATARS_JSON__', JSON.stringify(avatars))
+  .replace('__VOICE_JSON__', JSON.stringify(voiceClips))
   .replace('__CSS_JSON__', JSON.stringify(css))
   .replace('__AVATAR__', 'data:image/png;base64,' + avatar)
 
@@ -39,10 +55,10 @@ const tail = '\nreturn module.exports; } });\n'
 mkdirSync(join(root, 'lib'), { recursive: true })
 const bundle = head + body + tail
 writeFileSync(join(root, 'lib', 'client.js'), bundle)
-console.log('build: lib/client.js ' + bundle.length + ' chars (avatar ' + avatar.length + ' b64 chars, ' + avatars.length + ' random avatars)')
+console.log('build: lib/client.js ' + bundle.length + ' chars (avatar ' + avatar.length + ' b64 chars, ' + avatars.length + ' random avatars, ' + Object.keys(voiceClips).length + ' voice clips)')
 
 const card = (variant, phase, headline, bodyText, kind = 'hello', tag = '鲸鱼女仆 · 小鲸', extra = '') => `
-  <div class="dshg" data-phase="${phase}" data-variant="${variant}" data-kind="${kind}">
+  <div class="dshg" data-phase="${phase}" data-variant="${variant}" data-kind="${kind}" data-voice-controls="true">
     <span class="dshg-orbit" aria-hidden="true"></span>
     <div class="dshg-portrait">
       <img class="dshg-avatar" src="assets/avatar.png" alt="" />
@@ -56,6 +72,9 @@ const card = (variant, phase, headline, bodyText, kind = 'hello', tag = '鲸鱼�
       <p class="dshg-line">${bodyText}</p>
       ${extra}
     </div>
+    <button class="dshg-voice" type="button" data-voice="on" aria-label="关闭语音问候" aria-pressed="true" title="语音问候：开（点一下关掉）">
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 9.4h3.3L12 5.6v12.8L7.3 14.6H4z" fill="currentColor"/><path d="M15.3 8.7a4.7 4.7 0 0 1 0 6.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
     <button class="dshg-close" type="button" aria-label="关闭问候">&times;</button>
     <span class="dshg-progress" aria-hidden="true"><i style="width:38%"></i></span>
   </div>`

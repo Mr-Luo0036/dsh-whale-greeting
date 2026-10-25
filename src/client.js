@@ -43,6 +43,31 @@ var AVATAR = '__AVATAR__'
 var AVATARS = __AVATARS_JSON__
 var lastAvatarIndex = -1
 
+// ── 语音问候 ──────────────────────────────────────────────────────────────────
+//
+// 语音包在构建时由 assets/voice/manifest.json 注入，形状是：
+//
+//   { 'hi-0': { f: 'hi-0.mp3', t: '夜深了呢，主人！' }, 'line-7': { f: 'line-7.mp3', t: '…' } }
+//
+// `f` 是文件名，`t` 是这句的原文 —— 卡片显示的字和嘴里念的字从同一个清单里取，
+// 不会因为文案改了一句就音字不同步。没有语音包（只装了外壳）时这里是空对象，
+// 语音开关自己藏起来，卡片照旧只显示文字。
+var VOICE_PACK = __VOICE_JSON__
+var VOICE_SRC = '/plugins/dsh-whale-greeting/voice/'
+var VOICE_PREF_KEY = 'dsh-whale-greeting:voice'
+
+// 每个时段一句固定的开场白：语音问候只念这一句 + 正文，所以这两句必须在语音包里。
+var VOICE_HEADS = [
+  '夜深了呢，主人！',
+  '早上好，主人！',
+  '上午好，主人！',
+  '中午好，主人！',
+  '下午好，主人！',
+  '傍晚好，主人！',
+  '晚上好，主人！',
+  '夜深了，主人！'
+]
+
 var SHOW_MS = 12000
 var REPORT_SHOW_MS = 14000
 var EXIT_MS = 260
@@ -451,8 +476,12 @@ var PERMISSION_LINES = [
   '报告主人：{tool} 申请了更宽的权限（{reason}），小鲸把它拦在门口了。'
 ]
 
+function pickIndex(list) {
+  return Math.floor(Math.random() * list.length)
+}
+
 function pick(list) {
-  return list[Math.floor(Math.random() * list.length)]
+  return list[pickIndex(list)]
 }
 
 /**
@@ -469,19 +498,29 @@ function pickAvatar() {
   return '/plugins/dsh-whale-greeting/avatar/' + AVATARS[index]
 }
 
-function salutationFor(date) {
+/** 现在属于第几个时段（0 = 深夜 … 7 = 夜里到 24 点），语音包与文案共用这一套编号。 */
+function periodIndexFor(date) {
   var hour = date.getHours()
   for (var i = 0; i < SALUTATIONS.length; i += 1) {
-    if (hour < SALUTATIONS[i].until) return pick(SALUTATIONS[i].variants)
+    if (hour < SALUTATIONS[i].until) return i
   }
-  return '你好'
+  return SALUTATIONS.length - 1
+}
+
+function salutationFor(date) {
+  var index = periodIndexFor(date)
+  if (index < 0 || index >= SALUTATIONS.length) return '你好'
+  return pick(SALUTATIONS[index].variants)
 }
 
 /**
- * 从 120 句里挑一句，最近用过的先排除；全用完就重新洗牌。
+ * 从 120 句里挑一句的下标，最近用过的先排除；全用完就重新洗牌。
  * 存储不可用时退化成纯随机，不影响问候。
+ *
+ * 返回下标而不是文案，是因为语音包按 `line-<下标>` 存音频：拿到下标才能
+ * 保证卡片上的字和念出来的声音是同一句。
  */
-function pickLine() {
+function pickLineIndex() {
   var recent = []
   try {
     recent = JSON.parse(window.sessionStorage.getItem(RECENT_KEY) || '[]')
@@ -508,7 +547,7 @@ function pickLine() {
   } catch (error) {
     /* 隐私模式：轮换退化成随机 */
   }
-  return LINES[index]
+  return index
 }
 
 /** 用时说法：42 秒 / 3 分 12 秒 / 1 小时 5 分。 */
@@ -535,6 +574,14 @@ function fillTemplate(template, values) {
   })
 }
 
+/**
+ * 组装一张卡：文案 + 头像 + 要念的语音条目。
+ *
+ * `keys` 是语音包里的条目名，按顺序播：问候卡是「开场白 + 正文」两句，
+ * 回来 / 待机各一句。交付报告、长跑陪伴、授权请示里带 {time}/{count}，
+ * 这些数字没法预先录音，所以它们不出声 —— 语音问候只负责「问候」。
+ * 静音时 keys 仍然算出来，供开开关当场补念。
+ */
 function buildContent(kind, extra) {
   var avatar = pickAvatar()
   if (kind === 'done' || kind === 'failed') {
@@ -547,7 +594,8 @@ function buildContent(kind, extra) {
     return {
       headline: pick(failed ? FAIL_HEADS : DONE_HEADS),
       body: fillTemplate(pick(failed ? FAIL_LINES : DONE_LINES), values),
-      avatar: avatar
+      avatar: avatar,
+      keys: []
     }
   }
   if (kind === 'comfort') {
@@ -556,16 +604,43 @@ function buildContent(kind, extra) {
       body: fillTemplate(pick(COMFORT_LINES), {
         time: formatDuration(extra === undefined ? 0 : extra.duration)
       }),
-      avatar: avatar
+      avatar: avatar,
+      keys: []
     }
   }
   if (kind === 'return') {
-    return { headline: '主人，您回来啦！', body: pick(RETURN_LINES), avatar: avatar }
+    var backIndex = pickIndex(RETURN_LINES)
+    return {
+      headline: '主人，您回来啦！',
+      body: RETURN_LINES[backIndex],
+      avatar: avatar,
+      keys: ['ret-' + backIndex]
+    }
   }
   if (kind === 'idle') {
-    return { headline: '主人，小鲸等到您啦！', body: pick(IDLE_LINES), avatar: avatar }
+    var idleIndex = pickIndex(IDLE_LINES)
+    return {
+      headline: '主人，小鲸等到您啦！',
+      body: IDLE_LINES[idleIndex],
+      avatar: avatar,
+      keys: ['idle-' + idleIndex]
+    }
   }
-  return { headline: salutationFor(new Date()) + pick(HELLO_TAILS), body: pickLine(), avatar: avatar }
+
+  // 问候：语音只念「这一句开场白 + 这一句正文」，所以开场白换成语音包里那 8 句之一，
+  // 免得卡片写着「，主人～小鲸等您好久啦～」而嘴里念的是「，主人！」。
+  var period = periodIndexFor(new Date())
+  var lineIndex = pickLineIndex()
+  var keys = []
+  var headline
+  if (voiceState.enabled && VOICE_READY) {
+    headline = VOICE_HEADS[period]
+    if (VOICE_PACK['hi-' + period] !== undefined) keys.push('hi-' + period)
+  } else {
+    headline = salutationFor(new Date()) + pick(HELLO_TAILS)
+  }
+  keys.push('line-' + lineIndex)
+  return { headline: headline, body: LINES[lineIndex], avatar: avatar, keys: keys }
 }
 
 /** 卡片右上角的署名：按这一张卡在说什么切换。 */
@@ -617,6 +692,210 @@ function hasBootOverlay() {
     return false
   }
 }
+
+// ── 语音问候：开关 + 播放器 ──────────────────────────────────────────────────
+//
+// 一台播放器（模块级）服务两个 slot：后开始的一张卡会顶掉前一张的声音，不会叠着说话。
+// 开关状态存在 localStorage 里，刷新、换会话都记得；dock / hero 通过 subscribe 同步，
+// 不会出现"这张卡静音、那张卡有声音"。
+
+var VOICE_READY = false
+var voiceState = { enabled: false, listeners: [] }
+var voicePlayer = { queue: [], index: 0, el: null, armed: false }
+
+function hasVoicePack() {
+  for (var key in VOICE_PACK) {
+    if (Object.prototype.hasOwnProperty.call(VOICE_PACK, key)) return true
+  }
+  return false
+}
+
+function readVoicePref() {
+  try {
+    if (window.localStorage.getItem(VOICE_PREF_KEY) === '0') return false
+  } catch (error) {
+    /* 隐私模式读不到：按默认（开）走 */
+  }
+  return true
+}
+
+function persistVoicePref(enabled) {
+  try {
+    window.localStorage.setItem(VOICE_PREF_KEY, enabled ? '1' : '0')
+  } catch (error) {
+    /* 存不下就只在本次页面生效 */
+  }
+}
+
+function notifyVoice() {
+  for (var i = 0; i < voiceState.listeners.length; i += 1) {
+    try {
+      voiceState.listeners[i](voiceState.enabled)
+    } catch (error) {
+      /* 某个 slot 卸掉了不该影响别人 */
+    }
+  }
+}
+
+/** 让组件跟着开关走：开关一变，卡片上的喇叭图标和 aria 一起变。 */
+function useVoiceEnabled() {
+  var state = React.useState(voiceState.enabled)
+  React.useEffect(function () {
+    function sync(value) {
+      state[1](value)
+    }
+    voiceState.listeners.push(sync)
+    return function () {
+      var at = voiceState.listeners.indexOf(sync)
+      if (at >= 0) voiceState.listeners.splice(at, 1)
+    }
+  }, [])
+  return state[0]
+}
+
+function stopSpeech() {
+  voicePlayer.queue = []
+  voicePlayer.index = 0
+  var el = voicePlayer.el
+  voicePlayer.el = null
+  if (el === null) return
+  try {
+    el.onended = null
+    el.onerror = null
+    el.pause()
+    el.removeAttribute('src')
+    el.load()
+  } catch (error) {
+    /* 已经释放过就算了 */
+  }
+}
+
+/**
+ * 浏览器不给自动播放时（首屏问候没有用户手势），把队列停在原地等第一次点击/按键。
+ * 只挂一次，重试一次；还不行就安静地放弃 —— 问候的文字还在，不值得为声音打扰主人。
+ */
+function armVoiceRetry() {
+  if (voicePlayer.armed) return
+  voicePlayer.armed = true
+  window.addEventListener('pointerdown', voiceRetry, true)
+  window.addEventListener('keydown', voiceRetry, true)
+}
+
+function voiceRetry() {
+  window.removeEventListener('pointerdown', voiceRetry, true)
+  window.removeEventListener('keydown', voiceRetry, true)
+  voicePlayer.armed = false
+  if (!voiceState.enabled) return
+  var el = voicePlayer.el
+  if (el === null) {
+    playClip()
+    return
+  }
+  try {
+    var again = el.play()
+    if (again !== undefined && again !== null && typeof again.catch === 'function') {
+      again.catch(function () {})
+    }
+  } catch (error) {
+    /* 这一句播不了，等下一张卡 */
+  }
+}
+
+function playClip() {
+  if (!voiceState.enabled) return
+  if (voicePlayer.index >= voicePlayer.queue.length) {
+    voicePlayer.el = null
+    return
+  }
+  var key = voicePlayer.queue[voicePlayer.index]
+  var entry = VOICE_PACK[key]
+  if (entry === undefined || entry === null || typeof entry.f !== 'string') {
+    voicePlayer.index += 1
+    playClip()
+    return
+  }
+
+  var el
+  try {
+    el = new window.Audio(VOICE_SRC + entry.f)
+  } catch (error) {
+    return
+  }
+  el.volume = 0.92
+  voicePlayer.el = el
+  el.onended = function () {
+    if (voicePlayer.el !== el) return
+    voicePlayer.index += 1
+    playClip()
+  }
+  el.onerror = function () {
+    // 文件缺了 / 浏览器不认这个编码：跳过这一句，后面接着念。
+    if (voicePlayer.el !== el) return
+    diag('voice-miss', key)
+    voicePlayer.index += 1
+    playClip()
+  }
+
+  var started = el.play()
+  if (started !== undefined && started !== null && typeof started.catch === 'function') {
+    started.catch(function () {
+      if (voicePlayer.el !== el) return
+      diag('voice-blocked', key)
+      armVoiceRetry()
+    })
+  }
+}
+
+/** 念一张卡：keys 是按顺序播放的语音包条目。 */
+function speakKeys(keys) {
+  stopSpeech()
+  if (!voiceState.enabled || !VOICE_READY) return
+  if (keys === null || keys === undefined || keys.length === 0) return
+  voicePlayer.queue = keys.slice(0)
+  voicePlayer.index = 0
+  playClip()
+}
+
+function setVoiceEnabled(enabled) {
+  var next = enabled === true
+  if (voiceState.enabled === next) return
+  voiceState.enabled = next
+  persistVoicePref(next)
+  if (!next) stopSpeech()
+  diag('voice', next ? 'on' : 'off')
+  notifyVoice()
+}
+
+/** 卡角上那个小喇叭：开 / 关，点了就地生效（关掉时立刻闭嘴，打开时把当前这张卡再念一遍）。 */
+function voiceGlyph(enabled) {
+  return h('svg', {
+    viewBox: '0 0 24 24',
+    width: 15,
+    height: 15,
+    'aria-hidden': 'true',
+    focusable: 'false'
+  },
+  h('path', { d: 'M4 9.4h3.3L12 5.6v12.8L7.3 14.6H4z', fill: 'currentColor' }),
+  enabled
+    ? h('path', {
+      d: 'M15.3 8.7a4.7 4.7 0 0 1 0 6.6',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.7,
+      strokeLinecap: 'round'
+    })
+    : h('path', {
+      d: 'M15.6 9.5l5 5M20.6 9.5l-5 5',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.7,
+      strokeLinecap: 'round'
+    })
+  )
+}
+
+VOICE_READY = hasVoicePack()
+voiceState.enabled = VOICE_READY ? readVoicePref() : false
 
 /** 把标题里的「主人」挑出来上色。 */
 function headlineNodes(text) {
@@ -722,6 +1001,9 @@ function Greeting(variant, props) {
   var paused = pausedState[0]
   var setPaused = pausedState[1]
 
+  // 语音开关：任何一个 slot 里拨一下，两个 slot 的喇叭图标一起变。
+  var voiceOn = useVoiceEnabled()
+
   var viewRef = React.useRef(null)
   var pausedRef = React.useRef(false)
   var startedAt = React.useRef(0)
@@ -742,6 +1024,8 @@ function Greeting(variant, props) {
   function hide() {
     var cur = viewRef.current
     if (!cur || cur.phase === 'exit') return
+    // 卡片收起 = 话说完：声音跟着走，不留一句在后台念。
+    stopSpeech()
     commit({ phase: 'exit', kind: cur.kind, content: cur.content })
     window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(function () {
@@ -763,8 +1047,10 @@ function Greeting(variant, props) {
     startedAt.current = now
     limitRef.current = kind === 'done' || kind === 'failed' ? REPORT_SHOW_MS : SHOW_MS
     setProgress(0)
-    commit({ phase: 'enter', kind: kind, content: buildContent(kind, extra) })
+    var content = buildContent(kind, extra)
+    commit({ phase: 'enter', kind: kind, content: content })
     diag('show:' + variant, kind)
+    speakKeys(content.keys)
     return true
   }
 
@@ -842,6 +1128,8 @@ function Greeting(variant, props) {
     function onVisibility() {
       if (document.visibilityState === 'hidden') {
         hiddenAt = Date.now()
+        // 切到别的窗口就别念了：主人不在，念给谁听。
+        stopSpeech()
         return
       }
       var away = hiddenAt === 0 ? 0 : Date.now() - hiddenAt
@@ -884,6 +1172,7 @@ function Greeting(variant, props) {
     return function () {
       disposed = true
       window.clearTimeout(bootTimer)
+      stopSpeech()
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('pointerdown', onActivity, true)
       window.removeEventListener('pointermove', onMove, true)
@@ -921,6 +1210,7 @@ function Greeting(variant, props) {
       'data-variant': variant,
       'data-kind': view.kind,
       'data-paused': paused ? 'true' : 'false',
+      'data-voice-controls': VOICE_READY ? 'true' : 'false',
       role: 'status',
       'aria-live': 'polite',
       tabIndex: 0,
@@ -961,6 +1251,24 @@ function Greeting(variant, props) {
       ),
       h('p', { className: 'dshg-line' }, view.content.body)
     ),
+    // 语音开关：只有装了语音包才出现。开着时点一下闭嘴，关着时点一下把这张卡再念一遍。
+    VOICE_READY
+      ? h('button', {
+        className: 'dshg-voice',
+        type: 'button',
+        'data-voice': voiceOn ? 'on' : 'off',
+        'aria-pressed': voiceOn ? 'true' : 'false',
+        'aria-label': voiceOn ? '关闭语音问候' : '开启语音问候',
+        title: voiceOn ? '语音问候：开（点一下关掉）' : '语音问候：关（点一下打开）',
+        onClick: function (event) {
+          event.stopPropagation()
+          var next = !voiceOn
+          setVoiceEnabled(next)
+          // 打开时把当前这张卡补念一遍：主人点开就是想听，不用等下一张。
+          if (next && view !== null && view.content) speakKeys(view.content.keys)
+        }
+      }, voiceGlyph(voiceOn))
+      : null,
     h('button', {
       className: 'dshg-close',
       type: 'button',

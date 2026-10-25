@@ -39,6 +39,7 @@ dsh plugin --profile <你的 profile> add dsh-whale-greeting
 - **等你看得见才问**：启动动画的全屏覆盖层（`.dshba`）还在时不动，等它消失、且页面可见，才开始
 - **头像每次随机**：`assets/avatars/` 里的 24 张表情包头像，每次问候换一张（连续不重复），
   由 Host 的 `/plugins/dsh-whale-greeting/avatar/<name>.png` 提供；路由失效时回落到内联的 `assets/avatar.png`
+- **会说话**：问候卡可以用克隆音色念出来，卡角喇叭一键开关（详见「语音问候」）
 - **跟随主题**：只用 `--dsw-alias-*` token，深浅色自动适配
 - **可关闭**：点气泡、点 ×、按 Esc / Enter
 
@@ -110,22 +111,52 @@ dsh plugin --profile <你的 profile> add dsh-whale-greeting
 - **`data-approval-key`**：卡片带着审批的 key，宿主的「连按两次 Esc 停止本轮」会绕开这里，
   不会在等待授权时误杀任务
 
+## 语音问候
+
+问候卡会**用肥鱼的声音把话念出来**，卡角上一个喇叭按钮随时开关。
+
+音色直接取 AstrBot 插件 [`astrbot_plugin_feiyu_voice`](https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice)
+配套的肥鱼官方声库 [FeiyuVoice-CosyVoice3](https://huggingface.co/Esmerubphire/FeiyuVoice-CosyVoice3)：
+cute F6 的 LLM 权重 + `references/cute_N01.wav` 做 zero-shot prompt，用 CosyVoice3 0.5B
+（官方声库本身就是这套模型）逐句合成，所以耳朵里听到的和那个插件 `/肥鱼说话` 是同一个声线。
+
+| 项目 | 说明 |
+|---|---|
+| 覆盖范围 | 只覆盖「问候」：hello / return / idle 三类卡。完成报告、长跑陪伴、授权请示里带用时、第几件、工具名，这些变量没法预先录音，所以它们不出声 —— 语音只负责问候 |
+| 语音包 | `assets/voice/` 下 156 个 mp3（8 句时段开场白 + 120 句问候正文 + 16 句「回来啦」+ 12 句「等到你啦」）+ `manifest.json` |
+| 声音从哪来 | `manifest.json` 里的 `clips` 在构建时注入浏览器半：`{ 'line-7': { f: 'line-7.mp3', t: '…原文…' } }`。字和声音同源，改文案不会出现「写着一句、念着另一句」 |
+| 合成方式 | 声库 `FeiyuVoice-CosyVoice3`（cute F6）→ CosyVoice3 `inference_zero_shot`，参考音 `cute_N01.wav`／参考文本「我已经准备好了，我们开始吧。」；逐句 24 kHz 合成后削首尾静音、峰值归一到 0.89 |
+| 音色微调 | 官方参考音本身就不低（基频中位数 292 Hz），但短句生成时会往下塌到 250 Hz 左右，听感偏成熟。所以成片再用 Praat 的 PSOLA 做一次保时长的微调：音高中位数拉到 300 Hz、共振峰 ×1.10 —— 不改权重、不改 prompt，只把音色扶回参考音的音域，越听越像 B 站那条《人是猫》里的大肥鱼 |
+| 开关 | 卡角喇叭（`data-voice=on/off`），状态存 `localStorage` 的 `dsh-whale-greeting:voice`，默认开；关掉立刻停声，再打开会把当前这张卡补念一遍 |
+| 自动播放被拦 | 首屏问候没有用户手势，浏览器会拒播。这时把队列停在原地，等第一次点击/按键再补上（`voice-blocked` 会记进诊断） |
+| 收起 / 切走窗口 | 立刻停声，不留一句在后台念 |
+| 没有语音包时 | `assets/voice/manifest.json` 不存在 → 构建注入空清单 → 喇叭按钮自动隐藏，卡片回到纯文字形态 |
+
+这套语音包不是「近似克隆」出来的：权重和参考音都来自官方声库，跟插件里 `/肥鱼说话` 走的是
+同一套模型与 prompt，所以音色、口音、语气是同一个；音高再按上表扶到 300 Hz 那一档，比默认输出
+更细更甜。想重做（改文案、换 cute/gentle 风格、调音色高低），跑一遍 `tools/voice/feiyu_gen.py`
+即可：它读 `texts.json`（从 `src/client.js` 抠出来的文案），按 key 覆盖 `assets/voice/*.mp3`
+与 `manifest.json`，再 `node build.mjs` 重建浏览器半。音色高低两个旋钮是 `--formant`（共振峰
+倍数，越大越细）和 `--pitch-median`（目标基频，Hz），不想要微调就传 `--pitch-median 0`。
+
 ## 实现
 
 | 半 | 文件 | 作用 |
 |---|---|---|
-| Host | `index.js` | `/plugins/dsh-whale-greeting/status.json`、`/diag`、`/avatar/<name>.png` 三条路由；entry 被装载，`dsh.client` 声明的浏览器模块才会进页面 |
+| Host | `index.js` | `/plugins/dsh-whale-greeting/status.json`、`/diag`、`/avatar/<name>.png`、`/voice/<name>.mp3` 四条路由；entry 被装载，`dsh.client` 声明的浏览器模块才会进页面 |
 | Browser | `src/client.js` → `lib/client.js` | 两个 list slot 各注册一个 `Greeting(variant, props)`（渲染问候 / 交付 / 陪伴卡，内部再挂一个不渲染的 `ReportWatch` 盯 `running` 并驱动陪伴心跳），外加 `conversation.composer` 链上的一个 `ApprovalComposer`（只在审批挂起时获选） |
 
 浏览器半是纯 JS + `React.createElement`，不 import 任何包（React 由页面的模块表给）。
-构建做三件事：把 `src/style.css` 内联成 `CSS` 常量、把 `assets/avatar.png` 内联成兜底 data URI、
-把 `assets/avatars/*.png` 的文件名注入成随机头像名单。
+构建做四件事：把 `src/style.css` 内联成 `CSS` 常量、把 `assets/avatar.png` 内联成兜底 data URI、
+把 `assets/avatars/*.png` 的文件名注入成随机头像名单、把 `assets/voice/manifest.json` 的
+`clips` 注入成语音包清单。
 
 ```sh
 node build.mjs         # src/* + assets/* -> lib/client.js + preview.html
 node test/smoke.mjs    # 假 loader / 假 React / 假 ctx，断言注册、形态、三类卡片与文案库
 node test/report.mjs   # 假 Session 快照，断言完成报告只报一次、用时、出错与短轮次
 node test/comfort.mjs  # 假时钟 + 假心跳，断言陪伴只在 4~8 分钟之间出声、请示只认 approval
+node test/voice.mjs    # 假语音包，断言喇叭的出现/隐藏、开关持久化、补念当前卡
 ```
 
 ## 没有控制台也能看它走到哪一步
